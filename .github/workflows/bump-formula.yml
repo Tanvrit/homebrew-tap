@@ -30,45 +30,33 @@ jobs:
         run: |
           set -euo pipefail
           [ -n "${VERSION:-}" ] || { echo "::error::no version supplied"; exit 1; }
-          F=Formula/tanvrit.rb
-          sed -i "s/^  version \"[^\"]*\"/  version \"${VERSION}\"/" "$F"
-          declare -A SUFFIX=(
-            [MACOS_ARM64]="macOS-arm64" [MACOS_X64]="macOS-x64"
-            [LINUX_ARM64]="Linux-arm64" [LINUX_X64]="Linux-x64" )
-          for key in "${!SUFFIX[@]}"; do
-            url="https://dl.tanvrit.com/ai/manual/tanvrit-cli-${VERSION}-${SUFFIX[$key]}.tar.gz"
-            echo "Fetching $url"
-            if ! curl -fsSL -o /tmp/a.tgz "$url"; then
-              echo "::error::missing artifact $url — the release did not publish this platform's CLI tarball. Not pinning a half-broken formula."
-              exit 1
-            fi
-            sha=$(sha256sum /tmp/a.tgz | awk '{print $1}')
-            # Replace the placeholder OR a previously-pinned 64-hex sha on this platform's line.
-            sed -i "s/REPLACE_ON_RELEASE_${key}/${sha}/; " "$F"
-            awk -v k="$key" -v sha="$sha" '
-              BEGIN{IGNORECASE=0}
-              { print }
-            ' "$F" >/dev/null
-          done
-          # For re-bumps (already-pinned shas), rewrite each sha line under its url.
-          python3 - "$F" "$VERSION" <<'PY'
-import re,sys,subprocess,urllib.request,hashlib
-f,ver=sys.argv[1],sys.argv[2]
-s=open(f).read()
-suf={'macOS-arm64':None,'macOS-x64':None,'Linux-arm64':None,'Linux-x64':None}
-for p in list(suf):
-    u=f"https://dl.tanvrit.com/ai/manual/tanvrit-cli-{ver}-{p}.tar.gz"
-    try:
-        d=urllib.request.urlopen(u,timeout=120).read(); suf[p]=hashlib.sha256(d).hexdigest()
-    except Exception as e:
-        print(f"::error::{u}: {e}"); sys.exit(1)
-def repl(m):
-    p=m.group(1); sha=suf[p]; return m.group(0).split('sha256')[0]+f'sha256 "{sha}"'
-s=re.sub(r'tanvrit-cli-#\{version\}-(macOS-arm64|macOS-x64|Linux-arm64|Linux-x64)\.tar\.gz"\n(\s*)sha256 "[^"]*"',
-         lambda m: m.group(0).rsplit('sha256',1)[0]+f'sha256 "{suf[m.group(1)]}"', s)
-open(f,'w').write(s)
-PY
-          echo "=== result ==="; grep -nE 'version |url |sha256' "$F"
+          # One idempotent pass: set the version, then for each platform download
+          # the real tarball, hash it, and rewrite the sha256 line under that
+          # platform's url — whether it currently holds a REPLACE_ON_RELEASE_*
+          # placeholder or a previously-pinned hash. A missing tarball fails the
+          # whole job, so the formula is never pushed half-broken.
+          python3 - "Formula/tanvrit.rb" "$VERSION" <<'PY'
+          import re, sys, urllib.request, hashlib
+          path, ver = sys.argv[1], sys.argv[2]
+          s = open(path).read()
+          s = re.sub(r'^(  version )"[^"]*"', rf'\1"{ver}"', s, count=1, flags=re.M)
+          for suffix in ("macOS-arm64", "macOS-x64", "Linux-arm64", "Linux-x64"):
+              url = f"https://dl.tanvrit.com/ai/manual/tanvrit-cli-{ver}-{suffix}.tar.gz"
+              print(f"fetching {url}", flush=True)
+              try:
+                  data = urllib.request.urlopen(url, timeout=180).read()
+              except Exception as e:
+                  sys.exit(f"::error::missing artifact {url}: {e} — not pinning a half-broken formula")
+              sha = hashlib.sha256(data).hexdigest()
+              # match `...-<suffix>.tar.gz"` then the sha256 line right below it
+              pat = re.compile(rf'(-{re.escape(suffix)}\.tar\.gz"\n\s*sha256 )"[^"]*"')
+              s, n = pat.subn(rf'\g<1>"{sha}"', s, count=1)
+              if n != 1:
+                  sys.exit(f"::error::could not locate the sha256 line for {suffix}")
+              print(f"  {suffix} -> {sha}")
+          open(path, "w").write(s)
+          PY
+          echo "=== result ==="; grep -nE 'version |url |sha256' Formula/tanvrit.rb
       - name: Commit
         shell: bash
         env:
