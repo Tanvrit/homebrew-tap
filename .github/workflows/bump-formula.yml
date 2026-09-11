@@ -30,6 +30,7 @@ jobs:
         run: |
           set -euo pipefail
           [ -n "${VERSION:-}" ] || { echo "::error::no version supplied"; exit 1; }
+          VERSION="${VERSION#v}"   # accept either v1.5.33 (release tag) or 1.5.33
           # One idempotent pass: set the version, then for each platform download
           # the real tarball, hash it, and rewrite the sha256 line under that
           # platform's url — whether it currently holds a REPLACE_ON_RELEASE_*
