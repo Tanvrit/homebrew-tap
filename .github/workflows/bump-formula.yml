@@ -19,9 +19,12 @@ jobs:
     # runner group is opened to public repos. Never a GitHub-hosted image.
     runs-on:
       group: tanvrit
-      labels: [self-hosted, Linux, X64]
+      labels: [self-hosted, macOS, ARM64]
     timeout-minutes: 15
     steps:
+      - name: Prepare macOS CI tools
+        if: runner.os == 'macOS'
+        uses: tanvrit/artifactory/.github/actions/macos-ci-tools@main
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Pin version and per-platform sha256
         shell: bash
